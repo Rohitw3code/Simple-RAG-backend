@@ -488,7 +488,7 @@ def get_chat_history(document_id):
             'error': f'Error retrieving chat history: {str(e)}'
         }), 500
 
-@app.route('/documents', methods G=['GET'])
+@app.route('/documents', methods=['GET'])
 def list_documents():
     """List all uploaded documents"""
     try:
