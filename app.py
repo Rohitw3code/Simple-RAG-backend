@@ -8,7 +8,6 @@ from datetime import datetime
 from werkzeug.utils import secure_filename
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-# from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.vectorstores import FAISS
 from langchain.chains import RetrievalQA
 from langchain_openai import OpenAIEmbeddings
@@ -94,7 +93,6 @@ def process_pdf_with_langchain(pdf_url, document_id):
         if temp_pdf_path and os.path.exists(temp_pdf_path):
             os.remove(temp_pdf_path)
 
-# In the get_ai_response function in app.py
 def get_ai_response(query, document_id):
     """Get AI response using LangChain QA chain"""
     try:
@@ -104,7 +102,6 @@ def get_ai_response(query, document_id):
         # Create QA chain
         vectorstore = vectorstores[document_id]
         retriever = vectorstore.as_retriever()
-        # Replace ChatOpenAI with ChatGroq
         llm = ChatGroq(temperature=0, model_name="llama3-8b-8192")
 
         qa_chain = RetrievalQA.from_chain_type(
@@ -131,7 +128,6 @@ def star():
         }
     })
 
-    
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
@@ -146,7 +142,7 @@ def health_check():
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
-    """Upload PDF file endpoint"""
+    """Upload multiple PDF files endpoint"""
     try:
         # Check if OpenAI API key is configured
         if not os.getenv('OPENAI_API_KEY'):
@@ -161,73 +157,101 @@ def upload_file():
                 'error': 'No file provided'
             }), 400
 
-        file = request.files['file']
-        
-        if file.filename == '':
+        uploaded_files = request.files.getlist('file')
+        if not uploaded_files:
             return jsonify({
                 'success': False,
-                'error': 'No file selected'
+                'error': 'No files selected'
             }), 400
 
-        if not allowed_file(file.filename):
-            return jsonify({
-                'success': False,
-                'error': 'Only PDF files are allowed'
-            }), 400
+        results = []
+        for file in uploaded_files:
+            if file.filename == '':
+                continue
 
-        # Generate unique document ID
-        document_id = str(uuid.uuid4())
-        
-        # Save file temporarily
-        filename = secure_filename(file.filename)
-        temp_path = os.path.join(UPLOAD_FOLDER, f"{document_id}_{filename}")
-        file.save(temp_path)
+            if not allowed_file(file.filename):
+                results.append({
+                    'filename': file.filename,
+                    'success': False,
+                    'error': 'Only PDF files are allowed'
+                })
+                continue
 
-        # Check file size
-        file_size = os.path.getsize(temp_path)
-        if file_size > MAX_FILE_SIZE:
+            # Generate unique document ID
+            document_id = str(uuid.uuid4())
+            
+            # Save file temporarily
+            filename = secure_filename(file.filename)
+            temp_path = os.path.join(UPLOAD_FOLDER, f"{document_id}_{filename}")
+            file.save(temp_path)
+
+            # Check file size
+            file_size = os.path.getsize(temp_path)
+            if file_size > MAX_FILE_SIZE:
+                os.remove(temp_path)
+                results.append({
+                    'filename': filename,
+                    'success': False,
+                    'error': 'File size too large. Maximum size is 16MB'
+                })
+                continue
+
+            # Upload to tmpfiles.org
+            try:
+                public_url = upload_to_tmpfiles(temp_path)
+            except Exception as e:
+                os.remove(temp_path)
+                results.append({
+                    'filename': filename,
+                    'success': False,
+                    'error': f'Error uploading file: {str(e)}'
+                })
+                continue
+
+            # Process PDF with LangChain
+            try:
+                success, chunk_count = process_pdf_with_langchain(public_url, document_id)
+            except Exception as e:
+                os.remove(temp_path)
+                results.append({
+                    'filename': filename,
+                    'success': False,
+                    'error': f'Error processing PDF: {str(e)}'
+                })
+                continue
+
+            # Store document information
+            documents[document_id] = {
+                'id': document_id,
+                'filename': filename,
+                'public_url': public_url,
+                'upload_time': datetime.now().isoformat(),
+                'size': file_size,
+                'chunk_count': chunk_count
+            }
+            
+            # Initialize chat history
+            chat_histories[document_id] = []
+
+            # Clean up temporary file
             os.remove(temp_path)
-            return jsonify({
-                'success': False,
-                'error': 'File size too large. Maximum size is 16MB'
-            }), 400
 
-        # Upload to tmpfiles.org
-        try:
-            public_url = upload_to_tmpfiles(temp_path)
-        except Exception as e:
-            os.remove(temp_path)
-            return jsonify({
-                'success': False,
-                'error': f'Error uploading file: {str(e)}'
-            }), 500
-
-        # Process PDF with LangChain
-        success, chunk_count = process_pdf_with_langchain(public_url, document_id)
-
-        # Store document information
-        documents[document_id] = {
-            'id': document_id,
-            'filename': filename,
-            'public_url': public_url,
-            'upload_time': datetime.now().isoformat(),
-            'size': file_size,
-            'chunk_count': chunk_count
-        }
-        
-        # Initialize chat history
-        chat_histories[document_id] = []
-
-        # Clean up temporary file
-        os.remove(temp_path)
+            results.append({
+                'filename': filename,
+                'success': True,
+                'data': {
+                    'document_id': document_id,
+                    'filename': filename,
+                    'upload_time': documents[document_id]['upload_time'],
+                    'chunk_count': chunk_count
+                }
+            })
 
         return jsonify({
             'success': True,
             'data': {
-                'document_id': document_id,
-                'filename': filename,
-                'upload_time': documents[document_id]['upload_time'],
-                'chunk_count': chunk_count
+                'results': results,
+                'total_uploaded': len([r for r in results if r['success']])
             }
         })
 
@@ -237,7 +261,7 @@ def upload_file():
             os.remove(temp_path)
         return jsonify({
             'success': False,
-            'error': f'Error processing file: {str(e)}'
+            'error': f'Error processing files: {str(e)}'
         }), 500
 
 @app.route('/chat/<document_id>', methods=['POST'])
