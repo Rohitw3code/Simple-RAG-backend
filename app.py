@@ -526,7 +526,6 @@ def delete_document(document_id):
                 'success': False,
                 'error': 'Document not found'
             }), 404
-
         # Remove from storage
         del documents[document_id]
         
