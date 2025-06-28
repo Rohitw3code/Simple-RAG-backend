@@ -122,7 +122,7 @@ def get_ai_response(query, document_id):
         return f"Error generating response: {str(e)}"
 
 @app.route('/', methods=['GET'])
-def health_check():
+def star():
     return jsonify({
         'success': True,
         'data': {
