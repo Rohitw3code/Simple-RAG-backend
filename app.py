@@ -120,7 +120,17 @@ def get_ai_response(query, document_id):
 
     except Exception as e:
         return f"Error generating response: {str(e)}"
-    
+
+@app.route('/', methods=['GET'])
+def health_check():
+    return jsonify({
+        'success': True,
+        'data': {
+            'status': 'healthy',
+            'timestamp': datetime.now().isoformat()
+        }
+    })
+
     
 @app.route('/health', methods=['GET'])
 def health_check():
